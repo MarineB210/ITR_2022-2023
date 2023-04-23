@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <semaphore.h>
 #include <sys/sem.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
@@ -20,34 +22,75 @@
 #define SIGRT_SORTED (SIGRTMIN+1)
 #define SIGRT_START (SIGRTMIN+2)
 
-struct array* segment;
 
-volatile sig_atomic_t state_sender = __START__
+volatile sig_atomic_t state_sender = __START__;
 sigset_t mask;
 union sigval envelope;
 struct sigaction descriptor;
+int* segment;
+sem_t* sema;
 
-struct array{
-    sem_t sema;
-    pid_t pid;
-    signed int* tab;
-    unsigned int tab_size;
+unsigned int tab_max_space = TAB_MAX_SIZE * sizeof(signed int);
+
+void handlerSorted(int signum, siginfo_t* info, void* unused){
+    state_sender = OPERATING;
+}
+
+void send_tab(int* segment){
+    printf("Waiting for turn : %ld\n", (long)getpid());
+    state_sender = WAITING;
+
+    sem_wait(sema);
+    state_sender = OPERATING;
+    printf("Semaphore acquired : %ld\n", (long)getpid());
+    
+    //segment[0] = 15; Might want to use this indeed for better visibility 
+    segment[0] = (rand() % TAB_MAX_SIZE) + 1;
+    int* tab = segment + sizeof(pid_t) + sizeof(unsigned int);
+    printf("Unsorted array : ");
+    for(unsigned int i = 0; i < segment[0]; i++){
+        if(rand() % 5 == 0){    //Give a chance to the number to be negative
+            tab[i] = - rand();  // Reduce the maximum value here by writing -(rand() % (MAX_VALUE + 1))
+        }
+        else{
+            tab[i] = rand();    // Reduce the maximum value here by writing rand() % (MAX_VALUE + 1)
+        }
+        printf("%i ",tab[i]);
+    }
+
+    printf("\nSending array\n");
+    sigqueue(segment[1],SIGRT_START,envelope);
+    state_sender = EXPECTING;
+    sigdelset(&mask, SIGRT_SORTED);
+    sigprocmask(SIG_SETMASK, &mask, NULL);
+    while(state_sender == EXPECTING)
+        pause();
+        
+    printf("Smaller element : %i\n",tab[0]);
+    printf("Tab size : %u\n", segment[0]);
+    printf("Sorted array : ");
+    for(unsigned int i = 0; i < segment[0]; i++){
+        printf("%d ", tab[i]);
+    }
+    printf("\n");
+    state_sender = __FINAL__;
+    sem_post(sema);
 }
 
 int main(int argc, char* argv[]){
-    key_t ipc_key = ftok("application-shm", 4242);
+    srand(getpid());
+    key_t ipc_key = ftok("Sorter.c", 4242);
     if(ipc_key == -1){
         perror("ftok");
         return EXIT_SUCCESS;
     }
-
-    int shmid = shmget(ipc_key,TAB_MAX_SIZE + 4 + 4 + sizeof(sem_t), IPC_CREAT | 0666);
+    int shmid = shmget(ipc_key,sizeof(pid_t) + sizeof(unsigned int) + tab_max_space, IPC_CREAT | 0666);
     if(shmid == -1){
         perror("shmget");
         return EXIT_FAILURE;
     }
 
-    segment = shmat(shmid,NULL,0);
+    segment = (int*) shmat(shmid,NULL,0);
     if(segment ==(void*) -1){
         perror("shmat");
     }
@@ -60,44 +103,9 @@ int main(int argc, char* argv[]){
         descriptor.sa_sigaction = handlerSorted;
         sigaction(SIGRT_SORTED, &descriptor, NULL);
 
-        &segment->sema* = sem_open("/sema", O_CREATE, 0600, 1);
+        sema = sem_open("/sema", O_CREAT, 0600, 1);
         send_tab(segment);
     }
     shmdt(segment);
     return EXIT_SUCCESS;
-}
-
-void handlerSorted(int signum, siginfo_t* info, void* unused){
-    state_sender = OPERATING;
-}
-
-void* send_tab(signed int* segment){
-    state_sender = WAITING;
-
-    sem_wait(&segment->sema);
-    state_sender = OPERATING;
-    
-    &segment->tab_size = (rand() % TAB_MAX_SIZE) + 1;
-    &segment->tab[&segment->tab_size];
-    for(unsigned int i = 0; i < tab_size; i++){
-        &segment->tab[i] = rand(); // Only generate unsigned int
-    }
-
-    sigqueue(&segment->pid,SIGRT_START,envelope);
-    state_sender = EXPECTING;
-    sigdelset(&mask, SIGRT_SORTED);
-    sigprocmask(SIG_SETMASK, &mask, NULL);
-    while(state_sender == EXPECTING)
-        pause();
-    
-    printf("Smaller element : %i\n",&segment->tab[0]);
-    printf("Tab size : %u\n", &segment->tab_size);
-    printf("Sorted array : ");
-    for(unsigned int i = 0; i < &segment->tab_size; i++){
-        printf("%d ", &segment->tab[i]);
-    }
-    printf("\n")
-    state_sender = __FINAL__
-    sem_post(&segment->sema);
-    exit(EXIT_SUCCESS);
 }

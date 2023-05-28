@@ -1,10 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <pthread.h>
 #include <semaphore.h>
 #include <mqueue.h>
 
-
+#define _GNU_SOURCE
 #define __START__ 0
 #define __FINAL__ 1
 
@@ -14,72 +15,128 @@
 #define SIGRT_REQ (SIGRTMIN+1)
 #define SIGRT_ANS (SIGRTMIN+2)
 
-unsigned int id;
-unsigned int min_time;
-unsigned int max_time;
-unsigned int n_request;
+#define MAX_REQUESTS 10
+#define MAX_PACKETS 10
+#define REQUEST_TYPES 3 
+
+
+double threads_id[4]; // Is the client id (and also the thread id)
+unsigned int min_time[4];
+unsigned int max_time[4];
+unsigned int n_request[4];
+unsigned int number_of_packets[4];
+pthread_mutex_t lock;
+struct request* packet;     // Shared memory segment for requests
 
 struct request{
     unsigned int type_id;
-    unsigned int serial_number;
+    unsigned int serial_number = 0;
     unsigned int process_time;
 };
 
-struct request* packets;    //For future use, when client can send multiple packets
-struct request* packet;     //shared memory segment for requests
-sem_t* sema;
+struct answer{
+    unsigned int type_id;
+    unsigned int serial_number;
+};
+
+struct answer* answers; // Shared memory for answers
 sigset_t mask;
 union sigval envelope;
 struct sigaction descriptor;
-const char buffer[1024];
+const char buffer[sizeof(pid_t)];
 pid_t dispatcher_pid;
 
 int priority = 0;
-volatile sig_atomic_t state = __START__;
+volatile sig_atomic_t states[] = {__START__,__START__, __START__, __START__,__START__,__START__};
 
-void handlerAnswer(int signum, siginfo_t* info, void* unused){
-    state = OPERATING;
+unsigned int get_thread_num(double id){
+    for(unsigned int i = 0; i < 4; i++){
+        if(threads_id[i] == id){
+            return i;
+        }
+    }
+    printf("get_thread_num error\n");
+}
+
+void* behavior(void* argument){
+    unsigned int index = get_thread_num(pthread_self());
+    number_of_packets[index] = (rand() % MAX_PACKETS) + 1;
+    for(unsigned int i = 0; i < number_of_packets[index]; i++){
+        n_request[index] = (rand() % MAX_REQUESTS) + 1;
+        send_packet(n_request[index]);
+        unsigned int waiting_time = (rand() % max_time[index]) + min_time[index];
+        sleep(waiting_time);
+    }
+    memset(&packet,0,sizeof(packet));
+    pthread_exit(EXIT_SUCCESS);
+}
+
+void handleAnswer(int signum, siginfo_t* info, void* unused){
+    unsigned int index = get_thread_num(pthread_self());
+    key_t ipc_key = ftok("guichet.c", 4242);
+    if(ipc_key == -1){
+        perror("ftok");
+        return EXIT_SUCCESS;
+    }
+    int shmid = shmget(ipc_key, size_of_answers, IPC_CREAT | 0666);
+    if(shmid == -1){
+        perror("shmget");
+        return EXIT_FAILURE;
+    }
+
+    answers = (struct answer*) shmat(shmid,NULL,0);
+    if(answers == (void*) -1){
+        perror("shmat");
+    }
+    else{
+        states[index] == OPERATING;
+    }
 }
 
 void generate_packet(unsigned int n){
     for(unsigned int i = 0; i < n; i++){
-        //TO-DO : Assigne a type_id, serial_number and process_time to requests
-        unsigned type_id = ;
-        unsigned int serial_number = ;
-        unsigned int process_time = ;
+        unsigned type_id = (rand() % REQUEST_TYPES) + 1;
+        unsigned int process_time = (rand() % 5) + 1; 
         struct request request = { .type_id = type_id, .serial_number = serial_number, .process_time = process_time};
         packet[i] = request;
     }
 }
 
 void send_packet(unsigned int n){
-    state = WAITING;
-    sem_wait(sema);
-    state = OPERATING;
+    unsigned int index = get_thread_num(pthread_self());
+
+    states[index] = WAITING;
+    pthread_mutex_lock(&lock);    
+    states[index] = OPERATING;
+    
     generate_packet(n);
-    printf("Packet sent\n")
+    printf("Packet generated\n")
+    printf("Number of requests : %u\n", n_request[index]);
+    envelope = n; // Put the number of requests contained in the packet
+    printf("Warning dispatcher\n");
     sigqueue(dispatcher_pid, SIGRT_REQ, envelope);
 
-    state = WAITING;
+    // Waiting for the reception of all the answers.
+    states[index] = WAITING;
     sigdelset(&mask, SIGRT_ANS);
     sigprocmask(SIG_SETMASK, &mask, NULL);
-    while(state == WAITING){
+    while(states[index] == WAITING){
         pause();
     }
+
     printf("Answer received\n");
-    sem_post(sema);
+    pthread_mutex_unlock(&lock);
 }
 
 int main(int argc, char* argv[]){
     srand(getpid());
-    unsigned int number_of_request = 4;
-    unsigned int size_of_packet = sizeof(struct request) * number_of_request;
+    unsigned int size_of_packet = sizeof(struct request) * MAX_REQUESTS;
     key_t ipc_key = ftok("client.c", 4242);
     if(ipc_key == -1){
         perror("ftok");
         return EXIT_SUCCESS;
     }
-    int shmid = shmget(ipc_key,size_of_packet, IPC_CREAT | 0666);
+    int shmid = shmget(ipc_key, size_of_packet, IPC_CREAT | 0666);
     if(shmid == -1){
         perror("shmget");
         return EXIT_FAILURE;
@@ -96,7 +153,7 @@ int main(int argc, char* argv[]){
 
         descriptor.sa_flags = SA_SIGINFO;
 
-        descriptor.sa_sigaction = handlerAnswer;
+        descriptor.sa_sigaction = handleAnswer;
         sigaction(SIGRT_ANS, &descriptor, NULL);
 
         // Get the pid of the dispatcher
@@ -107,17 +164,35 @@ int main(int argc, char* argv[]){
             return EXIT_FAILURE;
         }
 
-        ssize_t amount = mq_receive(queue, buffer, 1024, &priority);
+        ssize_t amount = mq_receive(queue, buffer, sizeof(pid_t), &priority);
         if(amount == -1){
             perror("mq_receive");
         }
-
         dispatcher_pid = atoi(buffer);
-        sema = sem_open("/sema", O_CREAT, 0600, 1);
-        //TO-DO: generate multiple packets to send with waiting time
-        send_packet(number_of_request);
+
+        if (pthread_mutex_init(&lock, NULL) != 0){
+            printf("\n mutex init failed\n");
+            return 1;
+        } 
+       
+        pthread_t primary = pthread_self();
+        pthread_t first;
+        pthread_t secondary;
+        pthread_t third;
+        pthread_t fourth;
+
+        pthread_create(&first, NULL, behavior, NULL);
+        pthread_create(&secondary, NULL, behavior, NULL);
+        pthread_create(&third, NULL, behavior, NULL);
+        pthread_create(&fourth, NULL, behavior, NULL);
+        threads_id[0] = first;
+        threads_id[1] = secondary;
+        thread_id[2] = third;
+        thread_id[3] = fourth;
+
     }
     mq_unlink("/message_queue");
+    pthread_mutex_destroy(&lock);
     shmdt(packet);
     return EXIT_SUCCESS;
 }

@@ -105,9 +105,18 @@ void handleAnswer(int signum, siginfo_t* info, void* unused){
     else{
         answers[counter_answers] = answer;
         counter_answers++;
-        // TO-DO : Put busy = 0 and check if we can send a request that was put on hold
-        if (counter_answers == number_of_requests)
-        {
+        for(unsigned int i = 0; i < 6; i++){
+            if(guichets[i].pid == info->si_pid){
+                guichets[i].busy = 0;
+                for(unsigned int j = 0; j < number_of_requests; j++){
+                    if(requests_in_waiting[j].type_id == guichets[i].type_id){
+                        sendRequest(requests_in_waiting[j],guichets[i].pid);
+                        guichets[i].busy = 1;
+                    }
+                }
+            }
+        }
+        if(counter_answers == number_of_requests){
             sigqueue(client_pid, SIGRT_ANS, envelope);
             sigqueue(info->si_pid, SIGRT_OK, envelope);
             counter_answers = 0;
@@ -124,6 +133,7 @@ void handlePing(int signum, siginfo_t* info, void* unused){
     counter++;
     if(counter == 5){
         state = EXPECTING;
+        counter = 0;
     }
 }
 
@@ -261,13 +271,13 @@ int main(int argc, char* argv){
         sigdelset(SIGRT_ANS, &mask);
         sigdelset(SIGALRM, &mask);
         sigprocmask(SIG_SETMASK, &mask);
-        // The day will last 10 seconds
+        // The day will last 12 seconds
         alarm(12);
         while(1){
             pause();
         }
     }
     mq_close(queue);
-    shmdt(segment);
+    shmdt(packet);
     return EXIT_SUCCESS;
 }

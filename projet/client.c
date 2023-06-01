@@ -191,7 +191,6 @@ int main(int argc, char* argv[]){
         thread_id[3] = fourth;
 
     }
-    mq_unlink("/message_queue");
     pthread_mutex_destroy(&lock);
     shmdt(packet);
     return EXIT_SUCCESS;

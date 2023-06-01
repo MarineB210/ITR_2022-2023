@@ -149,7 +149,7 @@ int main(int argc, char* argv[]){
 
     sema = sem_open("/memory", O_CREAT, 0600, 1);
 
-    mqd_t queue = mq_open("/message_queue", O_CREAT | O_RDONLY);
+    mqd_t queue = mq_open("/message_queue", O_CREAT);
     if(queue == -1){
         perror("mq_open");
         return EXIT_FAILURE;
@@ -182,4 +182,5 @@ int main(int argc, char* argv[]){
     while(1){
         pause();
     }
+    mq_unlink("/message_queue");
 }

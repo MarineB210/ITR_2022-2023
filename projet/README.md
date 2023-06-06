@@ -2,7 +2,7 @@
 
 ## Compilation
 
-Pour le bon fonctionnement du programme, veillez dans un premier temps compiler et exécuter le fichier `dispatcher.c`. Les fichiers `client.c`et `guichet.c`ont besoin du pid du dispatcher pour pouvoir s'exécuter corretement. `guichet.c` est le deuxième à devoir être compilé et exécuté, et enfin le fichier `client.c`. Les guichets ont besoins d'être initialisé pour pouvoir traiter les demandes des clients.
+Pour le bon fonctionnement du programme, veillez dans un premier temps compiler et exécuter le fichier `dispatcher.c`. Les fichiers `client.c` et `guichet.c`ont besoin du pid du dispatcher pour pouvoir s'exécuter corretement. `guichet.c` est le deuxième à devoir être compilé et exécuté, et enfin le fichier `client.c`. Les guichets ont besoins d'être initialisé pour pouvoir traiter les demandes des clients.
 
 ## Terminaison
 

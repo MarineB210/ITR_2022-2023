@@ -7,8 +7,7 @@ Pour le bon fonctionnement du programme, veillez dans un premier temps compiler 
 ## Terminaison
 
 Lorsque toutes les requêtes de tous les paquets auront reçu leur réponse, le processus `client` se terminera automatiquement.
-Pour terminer `dispatcher` et `guichet` veuillez faire ctrl+c, un handler fait pour a été implémenté permettant de cloturer l'utilisation des différents
-élements dans ces fichiers.
+Pour terminer `dispatcher` et `guichet` veuillez faire ctrl+c, un handler fait pour a été implémenté permettant de cloturer l'utilisation des différents élements dans ces fichiers.
 
 ## Eléments non implémentés
 

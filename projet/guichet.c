@@ -1,26 +1,29 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <mqueue.h>
 #include <semaphore.h>
+#include <string.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 #define _GNU_SOURCE
 #define __START__ 0
 #define WAITING 1
 #define OPERATING 2
-#define __FINAL__ 3
+#define DONE 3
+#define __FINAL__ 4
 
 #define SIGRT_REQ (SIGRTMIN+1)
 #define SIGRT_ANS (SIGRTMIN+2)
 #define SIGRT_PING (SIGRTMIN+3)
 #define SIGRT_OK (SIGRTMIN+4)
+#define SIGRT_START (SIGRTMIN+5)
 
 
 #define REQUEST_TYPES 3 
 
-
-double threads_id[6];
-unsigned int type_id[6];
 
 struct request{
     unsigned int type_id;
@@ -33,109 +36,173 @@ struct answer{
     unsigned int serial_number;
 };
 
+struct request requests_type_1[2];
+struct request requests_type_2[2];
+struct request requests_type_3[2];
 
 sem_t* sema;
 sigset_t mask;
 union sigval envelope;
 struct sigaction descriptor;
 pid_t dispatcher_pid;
-const char buffer[1024];
+char buffer[10];
 mqd_t queue;
-struct request request;
 
+unsigned int exit_prog = 1;
+unsigned int counter = 0;
+int priority = 0;
 
-volatile sig_atomic_t states[] = {__START__,__START__, __START__, __START__,__START__,__START__};
+volatile sig_atomic_t state = __START__;
 
-unsigned int get_thread_num(double id){
-    for(unsigned int i = 0; i < 4; i++){
-        if(threads_id[i] == id){
-            return i;
-        }
+void handler(int signum, siginfo_t* info, void* unused){
+    if(signum == SIGINT){
+        exit_prog = 0;
+        printf("\nClosing\n");
     }
-    printf("get_thread_num error\n");
 }
 
-void* behaviorType1(void* argument){
-    // Send confirmation to the dispatcher that its pid was correctly received
-    unsigned int index = get_thread_num(pthread_self());
-    type_id[index] = 1;
-    envelope = type_id;
-    sigqueue(dispatcher_pid, SIGRT_PING, envelope);
-
-    // Ready to receive requests
-    states[index] = WAITING;
-    sigdelset(SIGRT_REQ, &mask);
-    sigprocmask(SIG_SETMASK, &mask, NULL);
-    while(1){
-        pause();
-    }
-    
-}
-
-void* behaviorType2(void* argument){
-    // Send confirmation to the dispatcher that its pid was correctly received
-    unsigned int index = get_thread_num(pthread_self());
-    type_id[index] = 2;
-    envelope = type_id;
-    sigqueue(dispatcher_pid, SIGRT_PING, envelope);
-
-    // Ready to receive requests
-    states[index] = WAITING;
-    sigdelset(SIGRT_REQ, &mask);
-    sigprocmask(SIG_SETMASK, &mask, NULL);
-    while(1){
-        pause();
-    }
-    
-}
-
-void* behaviorType3(void* argument){
-    // Send confirmation to the dispatcher that its pid was correctly received
-    unsigned int index = get_thread_num(pthread_self());
-    type_id[index] = 3;
-    envelope = type_id;
-    sigqueue(dispatcher_pid, SIGRT_PING, envelope);
-
-    // Ready to receive requests
-    states[index] = WAITING;
-    sigdelset(SIGRT_REQ, &mask);
-    sigprocmask(SIG_SETMASK, &mask, NULL);
-    while(1){
-        pause();
-    }
-    
-}
 
 void handleOK(int signum, siginfo_t* info, void* unused){
-    unsigned int index = get_thread_num(pthread_self());
-    sema_post(sema);
-    states[index] == WAITING;
+    state = DONE;
 }
 
+
+/*
+    Put the requests received in array based on their type id.
+*/
+int putInQueue(struct request request){
+    unsigned int type_id = request.type_id;
+    if(type_id == 1){
+        if(requests_type_1[0].type_id == 0){
+            requests_type_1[0] = request;
+            return 1;
+        }
+        else if(requests_type_1[1].type_id == 0){
+            requests_type_1[1] = request;
+            return 1;
+        }
+        else{
+            printf("Erreur\n");
+            return 0;
+        }
+    }
+    else if(type_id == 2){
+        if(requests_type_2[0].type_id == 0){
+            requests_type_2[0] = request;
+            return 1;
+        }
+        else if(requests_type_2[1].type_id == 0){
+            requests_type_2[1] = request;
+            return 1;
+        }
+        else{
+            printf("Erreur\n");
+            return 0;
+        }
+    }
+    else if(type_id == 3){
+        if(requests_type_3[0].type_id == 0){
+            requests_type_3[0] = request;
+            return 1;
+        }
+        else if(requests_type_3[1].type_id == 0){
+            requests_type_3[1] = request;
+            return 1;
+        }
+        else{
+            printf("Erreur\n");
+            return 0;
+        }
+    } 
+}
+
+
+void sendAnswer(struct request* requests){
+    for(unsigned int i = 0; i < 2; i++){
+        
+        state = OPERATING;
+        if(requests[i].type_id != 0){
+            // Process time of the request.
+            printf("Dealing with request %u\n",requests[i].serial_number);
+            printf("Processing time : %u\n",requests[i].process_time);
+            sleep(requests[i].process_time);
+
+            struct answer answer = {.type_id = requests[i].type_id, .serial_number = requests[i].serial_number};
+            int status = mq_send(queue, (const char *) &answer, sizeof(struct answer),0);
+
+            if(status == -1){
+                perror("mq_send");
+            }
+            sigdelset(&mask, SIGRT_OK);
+            sigprocmask(SIG_SETMASK, &mask, NULL);
+            sigqueue(dispatcher_pid, SIGRT_ANS, envelope);
+            state = WAITING;
+            
+            while(state == WAITING){
+                pause();
+            } 
+            
+            requests[i].type_id = 0;
+            sigaddset(&mask, SIGRT_OK);
+            sigprocmask(SIG_SETMASK, &mask, NULL);
+        }
+    }
+}
+
+
+/*
+    START signal is received when all the requests the dispatcher could send were sent.
+    The guichet begin the treatment of the requests.
+*/
+void handleStart(int signum, siginfo_t* info, void* unused){
+    printf("All requests have been received\n");
+    sem_wait(sema);
+    
+    sendAnswer(requests_type_1);
+    sendAnswer(requests_type_2);
+    sendAnswer(requests_type_3);
+    
+    sem_post(sema);
+}
+
+
 void handleRequest(int signum, siginfo_t* info, void* unused){
-    ssize_t amount = mq_receive(queue, request, sizeof(struct request), &priority);
+    
+    state = OPERATING;
+    
+    struct request request;
+    ssize_t amount = mq_receive(queue,(char *) &request, 8192, &priority);
     if(amount == -1){
         perror("mq_receive");
     }
-    sigqueue(dispatcher_pid, SIGRT_OK, envelope);
-    sem_wait(sema);
+    printf("Received request %u with type %u\n",request.serial_number,request.type_id);
+    putInQueue(request);
     
-    // Process time of the request.
-    sleep(request.process_time);
+    sigqueue(dispatcher_pid, SIGRT_OK, envelope);
+    printf("Confirmation sent to dispatcher\n");
+}
 
-    struct answer answer = {.type_id = request.type_id, .serial_number = request.serial_number};
-    int status = mq_send(queue, answer, sizeof(struct answer),0);
-    if(status == -1){
-        perror("mq_send");
+
+/*
+    Artificial memset used to fill the requests array with an initial request of type 0.
+*/
+void fillRequests(struct request* requests, unsigned int size){
+    struct request request = {.type_id = 0, .serial_number = 0, .process_time = 0};
+    for(unsigned int i = 0; i < size; i++){
+       requests[i] = request;
     }
-    sigqueue(dispatcher_pid, SIGRT_ANS, envelope);
-
 }
 
 
 int main(int argc, char* argv[]){
     srand(getpid());
+    memset(buffer,0,sizeof(buffer));
+    fillRequests(requests_type_1,2);
+    fillRequests(requests_type_2,2);
+    fillRequests(requests_type_3,2);
+        
     sigfillset(&mask);
+    sigdelset(&mask, SIGINT);
     sigprocmask(SIG_SETMASK, &mask, NULL);
     memset(&descriptor,0,sizeof(descriptor));
 
@@ -143,44 +210,45 @@ int main(int argc, char* argv[]){
 
     descriptor.sa_sigaction = handleRequest;
     sigaction(SIGRT_REQ, &descriptor, NULL);
+    
+    descriptor.sa_sigaction = handleStart;
+    sigaction(SIGRT_START, &descriptor, NULL);
 
     descriptor.sa_sigaction = handleOK;
     sigaction(SIGRT_OK, &descriptor, NULL);
+    
+    descriptor.sa_sigaction = handler;
+    sigaction(SIGINT, &descriptor, NULL);
 
     sema = sem_open("/memory", O_CREAT, 0600, 1);
 
-    mqd_t queue = mq_open("/message_queue", O_CREAT);
+    queue = mq_open("/dispatcher", O_CREAT | O_RDWR, 0666, NULL);
     if(queue == -1){
         perror("mq_open");
         return EXIT_FAILURE;
     }
-
+    
+    ssize_t amount = mq_receive(queue, buffer, 8192, &priority);
+    if(amount == -1){
+        perror("mq_receive");
+    }
+    
+    printf("Guichet received dispatcher's pid : %s\n", buffer);    
     dispatcher_pid = atoi(buffer);
     
-    pthread_t primary = pthread_self();
-    pthread_t first;
-    pthread_t secondary;
-    pthread_t third;
-    pthread_t fourth;
-    pthread_t fifth;
-    pthread_t sixth;
+    // Warn dispatcher that its pid was correctly received
+    sigqueue(dispatcher_pid, SIGRT_PING, envelope);
 
-    pthread_create(&first, NULL, behaviorType3, NULL);
-    pthread_create(&secondary, NULL, behaviorType1, NULL);
-    pthread_create(&third, NULL, behaviorType2, NULL);
-    pthread_create(&fourth, NULL, behaviorType3, NULL);
-    pthread_create(&fifth, NULL, behaviorType1, NULL);
-    pthread_create(&sixth, NULL, behaviorType2, NULL);
-
-    threads_id[0] = first;
-    threads_id[1] = secondary;
-    threads_id[2] = third;
-    threads_id[3] = fourth;
-    threads_id[4] = fifth;
-    threads_id[5] = sixth;
-
-    while(1){
+    // Ready to receive requests
+    state = WAITING;
+    sigdelset(&mask, SIGRT_REQ);
+    sigdelset(&mask, SIGRT_START);
+    sigprocmask(SIG_SETMASK, &mask, NULL);
+    
+    while(exit_prog){
         pause();
     }
-    mq_unlink("/message_queue");
+    printf("Guichet process ended\n");
+    sem_unlink("/memory");
+    mq_unlink("/dispatcher");
 }
